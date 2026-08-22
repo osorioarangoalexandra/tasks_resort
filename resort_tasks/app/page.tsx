@@ -656,7 +656,12 @@ export default function Home() {
         </Link>
 
         {/* ADD TASK */}
-
+          <Link
+          href="/housekeeping"
+          className="mb-3 block w-full rounded-xl bg-white px-4 py-3 text-center font-semibold text-gray-900 shadow-sm"
+        >
+          🧹 Housekeeping
+        </Link>
         <button
           onClick={() =>
             setShowForm(!showForm)
