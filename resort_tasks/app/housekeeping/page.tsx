@@ -1119,3 +1119,4 @@ export default function HousekeepingPage() {
       </div>
     </main>
   );
+}
