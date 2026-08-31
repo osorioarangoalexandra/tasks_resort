@@ -516,10 +516,22 @@ export default function Home() {
     window.open(whatsappUrl, "_blank");
   }
 
+  const handleLogout = async () => {
+  const { error } = await supabase.auth.signOut();
+
+  if (error) {
+    alert("Could not sign out. Please try again.");
+    return;
+  }
+
+    window.location.href = "/login";
+  };
+
   return (
     <main className="min-h-screen bg-gray-100 p-4">
       <div className="mx-auto max-w-md">
-        <div className="mb-6">
+        <div className="mb-6 flex items-start justify-between gap-4">
+        <div>
           <h1 className="text-2xl font-bold text-gray-900">
             Resort on Cedar
           </h1>
@@ -528,6 +540,15 @@ export default function Home() {
             Task Board
           </p>
         </div>
+
+        <button
+          type="button"
+          onClick={handleLogout}
+          className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50"
+        >
+          Log out
+        </button>
+      </div>
 
         {/* STATUS COUNTERS */}
 

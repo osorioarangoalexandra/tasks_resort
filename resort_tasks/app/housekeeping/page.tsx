@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/components/AuthGuard";
 
 type Unit = {
   id: number;
@@ -74,6 +75,11 @@ const statusStyles: Record<string, string> = {
 };
 
 export default function HousekeepingPage() {
+  const { role, canView, canEdit } = useAuth();
+  const canViewTasks = canView("tasks");
+  const canEditHousekeeping = canEdit("housekeeping");
+  const canRemoveFromCleaning = role === "admin";
+
   const [units, setUnits] = useState<Unit[]>([]);
   const [sessions, setSessions] = useState<CleaningSession[]>([]);
   const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([]);
@@ -163,6 +169,17 @@ export default function HousekeepingPage() {
     loadData();
   }, []);
 
+  async function handleLogout() {
+    const { error } = await supabase.auth.signOut();
+
+    if (error) {
+      alert("Could not sign out. Please try again.");
+      return;
+    }
+
+    window.location.href = "/login";
+  }
+
   function getCurrentSession(unitId: number) {
     return sessions.find(
       (session) =>
@@ -208,6 +225,8 @@ export default function HousekeepingPage() {
   }
 
   async function markForCleaning(unitId: number) {
+    if (!canEditHousekeeping) return;
+
     if (!staffName.trim()) {
       alert("Please enter your name first.");
       return;
@@ -254,6 +273,8 @@ export default function HousekeepingPage() {
   }
 
   async function startCleaning(session: CleaningSession) {
+    if (!canEditHousekeeping) return;
+
     if (!staffName.trim()) {
       alert("Please enter your name first.");
       return;
@@ -292,6 +313,8 @@ export default function HousekeepingPage() {
   async function removeFromCleaningList(
     session: CleaningSession
   ) {
+    if (!canRemoveFromCleaning) return;
+
     if (!staffName.trim()) {
       alert("Please enter your name first.");
       return;
@@ -338,6 +361,8 @@ export default function HousekeepingPage() {
     session: CleaningSession,
     newStatus: string
   ) {
+    if (!canEditHousekeeping) return;
+
     if (!staffName.trim()) {
       alert("Please enter your name first.");
       return;
@@ -387,6 +412,8 @@ export default function HousekeepingPage() {
     checklistItemId: number,
     checked: boolean
   ) {
+    if (!canEditHousekeeping) return;
+
     if (!staffName.trim()) {
       alert("Please enter your name first.");
       return;
@@ -443,6 +470,8 @@ export default function HousekeepingPage() {
   }
 
   async function addUpdate(sessionId: number) {
+    if (!canEditHousekeeping) return;
+
     if (!updateMessage.trim()) {
       return;
     }
@@ -570,12 +599,22 @@ export default function HousekeepingPage() {
     return (
       <main className="min-h-screen bg-gray-100 p-4">
         <div className="mx-auto max-w-md">
-          <button
-            onClick={() => setSelectedUnitId(null)}
-            className="mb-4 text-sm text-gray-500 underline"
-          >
-            ← Back to Housekeeping
-          </button>
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <button
+              onClick={() => setSelectedUnitId(null)}
+              className="text-sm text-gray-500 underline"
+            >
+              ← Back to Housekeeping
+            </button>
+
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50"
+            >
+              Log out
+            </button>
+          </div>
 
           <div className="mb-4 rounded-2xl bg-white p-5 shadow-sm">
             <div className="flex items-start justify-between gap-3">
@@ -612,14 +651,16 @@ export default function HousekeepingPage() {
                   </p>
                 )}
 
-                <button
-                  onClick={() =>
-                    markForCleaning(selectedUnit.id)
-                  }
-                  className="mt-4 w-full rounded-xl bg-red-600 px-4 py-3 font-semibold text-white"
-                >
-                  Mark for Cleaning
-                </button>
+                {canEditHousekeeping && (
+                  <button
+                    onClick={() =>
+                      markForCleaning(selectedUnit.id)
+                    }
+                    className="mt-4 w-full rounded-xl bg-red-600 px-4 py-3 font-semibold text-white"
+                  >
+                    Mark for Cleaning
+                  </button>
+                )}
               </div>
             ) : selectedSession.status === "Needs Cleaning" ? (
               <div className="mt-5">
@@ -628,23 +669,27 @@ export default function HousekeepingPage() {
                   but cleaning has not started yet.
                 </p>
 
-                <button
-                  onClick={() =>
-                    startCleaning(selectedSession)
-                  }
-                  className="mt-4 w-full rounded-xl bg-orange-500 px-4 py-3 font-semibold text-white"
-                >
-                  Start Cleaning
-                </button>
+                {canEditHousekeeping && (
+                  <button
+                    onClick={() =>
+                      startCleaning(selectedSession)
+                    }
+                    className="mt-4 w-full rounded-xl bg-orange-500 px-4 py-3 font-semibold text-white"
+                  >
+                    Start Cleaning
+                  </button>
+                )}
 
-                <button
-                  onClick={() =>
-                    removeFromCleaningList(selectedSession)
-                  }
-                  className="mt-2 w-full rounded-xl border border-gray-300 bg-white px-4 py-3 text-sm font-semibold text-gray-600"
-                >
-                  Remove from Cleaning List
-                </button>
+                {canRemoveFromCleaning && (
+                  <button
+                    onClick={() =>
+                      removeFromCleaningList(selectedSession)
+                    }
+                    className="mt-2 w-full rounded-xl border border-gray-300 bg-white px-4 py-3 text-sm font-semibold text-gray-600"
+                  >
+                    Remove from Cleaning List
+                  </button>
+                )}
               </div>
             ) : (
               <>
@@ -671,6 +716,7 @@ export default function HousekeepingPage() {
                   </p>
                 </div>
 
+                {canEditHousekeeping && (
                 <div className="mt-5 grid grid-cols-2 gap-2">
                   {selectedSession.status !== "In Progress" && (
                     <button
@@ -724,6 +770,7 @@ export default function HousekeepingPage() {
                     Mark Ready
                   </button>
                 </div>
+                )}
               </>
             )}
           </div>
@@ -733,13 +780,15 @@ export default function HousekeepingPage() {
               Staff
             </p>
 
-            <input
-              type="text"
-              value={staffName}
-              onChange={(e) => setStaffName(e.target.value)}
-              placeholder="Your name"
-              className="w-full rounded-lg border border-gray-300 px-3 py-2"
-            />
+            {canEditHousekeeping && (
+              <input
+                type="text"
+                value={staffName}
+                onChange={(e) => setStaffName(e.target.value)}
+                placeholder="Your name"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2"
+              />
+            )}
 
             {selectedSession && (
               <div className="mt-3 space-y-1 text-xs text-gray-500">
@@ -800,6 +849,7 @@ export default function HousekeepingPage() {
                                 <input
                                   type="checkbox"
                                   checked={checked}
+                                  disabled={!canEditHousekeeping}
                                   onChange={(e) =>
                                     toggleChecklistItem(
                                       selectedSession.id,
@@ -807,7 +857,7 @@ export default function HousekeepingPage() {
                                       e.target.checked
                                     )
                                   }
-                                  className="h-5 w-5"
+                                  className="h-5 w-5 disabled:cursor-not-allowed"
                                 />
 
                                 <span
@@ -838,27 +888,31 @@ export default function HousekeepingPage() {
                     room.
                   </p>
 
-                  <textarea
-                    value={updateMessage}
-                    onChange={(e) =>
-                      setUpdateMessage(e.target.value)
-                    }
-                    placeholder="e.g. Bathroom finished. Need fresh linen and floors still need to be done."
-                    rows={3}
-                    className="mt-3 w-full rounded-lg border border-gray-300 px-3 py-2"
-                  />
+                  {canEditHousekeeping && (
+                    <>
+                      <textarea
+                        value={updateMessage}
+                        onChange={(e) =>
+                          setUpdateMessage(e.target.value)
+                        }
+                        placeholder="e.g. Bathroom finished. Need fresh linen and floors still need to be done."
+                        rows={3}
+                        className="mt-3 w-full rounded-lg border border-gray-300 px-3 py-2"
+                      />
 
-                  <button
-                    onClick={() =>
-                      addUpdate(selectedSession.id)
-                    }
-                    disabled={savingUpdate}
-                    className="mt-3 w-full rounded-xl bg-black px-4 py-3 font-semibold text-white disabled:opacity-50"
-                  >
-                    {savingUpdate
-                      ? "Saving..."
-                      : "Add Update"}
-                  </button>
+                      <button
+                        onClick={() =>
+                          addUpdate(selectedSession.id)
+                        }
+                        disabled={savingUpdate}
+                        className="mt-3 w-full rounded-xl bg-black px-4 py-3 font-semibold text-white disabled:opacity-50"
+                      >
+                        {savingUpdate
+                          ? "Saving..."
+                          : "Add Update"}
+                      </button>
+                    </>
+                  )}
 
                   {selectedUpdates.length === 0 ? (
                     <p className="mt-4 text-sm text-gray-400">
@@ -911,12 +965,26 @@ export default function HousekeepingPage() {
   return (
     <main className="min-h-screen bg-gray-100 p-4">
       <div className="mx-auto max-w-md">
-        <Link
-          href="/"
-          className="mb-4 inline-block text-sm text-gray-500 underline"
-        >
-          ← Back to Task Board
-        </Link>
+        <div className="mb-4 flex items-center justify-between gap-4">
+          {canViewTasks ? (
+            <Link
+              href="/"
+              className="text-sm text-gray-500 underline"
+            >
+              ← Back to Task Board
+            </Link>
+          ) : (
+            <span />
+          )}
+
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50"
+          >
+            Log out
+          </button>
+        </div>
 
         <div className="mb-6">
           <h1 className="text-2xl font-bold text-gray-900">
@@ -926,21 +994,29 @@ export default function HousekeepingPage() {
           <p className="text-gray-500">
             Live cleaning status for all units
           </p>
+
+          {!canEditHousekeeping && (
+            <div className="mt-3 rounded-xl bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700">
+              View only — you cannot update housekeeping.
+            </div>
+          )}
         </div>
 
-        <div className="mb-4 rounded-2xl bg-white p-4 shadow-sm">
-          <label className="mb-1 block text-sm font-medium text-gray-700">
-            Your name
-          </label>
+        {canEditHousekeeping && (
+          <div className="mb-4 rounded-2xl bg-white p-4 shadow-sm">
+            <label className="mb-1 block text-sm font-medium text-gray-700">
+              Your name
+            </label>
 
-          <input
-            type="text"
-            value={staffName}
-            onChange={(e) => setStaffName(e.target.value)}
-            placeholder="Enter your name before updating rooms"
-            className="w-full rounded-lg border border-gray-300 px-3 py-2"
-          />
-        </div>
+            <input
+              type="text"
+              value={staffName}
+              onChange={(e) => setStaffName(e.target.value)}
+              placeholder="Enter your name before updating rooms"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2"
+            />
+          </div>
+        )}
 
         <div className="mb-4 grid grid-cols-2 gap-2">
           <div className="rounded-xl bg-red-50 p-3 text-center">
