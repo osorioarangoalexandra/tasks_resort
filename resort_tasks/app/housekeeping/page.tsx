@@ -50,6 +50,7 @@ type CleaningUpdate = {
 };
 
 type FilterType = "all" | "required";
+type ViewMode = "board" | "history";
 
 const openStatuses = [
   "Needs Cleaning",
@@ -75,10 +76,11 @@ const statusStyles: Record<string, string> = {
 };
 
 export default function HousekeepingPage() {
-  const { role, canView, canEdit } = useAuth();
+  const { userName, role, canView, canEdit } = useAuth();
   const canViewTasks = canView("tasks");
   const canEditHousekeeping = canEdit("housekeeping");
   const canRemoveFromCleaning = role === "admin";
+  const currentStaffName = userName?.trim() || "Unknown user";
 
   const [units, setUnits] = useState<Unit[]>([]);
   const [sessions, setSessions] = useState<CleaningSession[]>([]);
@@ -87,11 +89,13 @@ export default function HousekeepingPage() {
   const [updates, setUpdates] = useState<CleaningUpdate[]>([]);
 
   const [selectedUnitId, setSelectedUnitId] = useState<number | null>(null);
+  const [selectedHistorySessionId, setSelectedHistorySessionId] =
+    useState<number | null>(null);
   const [loading, setLoading] = useState(true);
-  const [staffName, setStaffName] = useState("");
   const [updateMessage, setUpdateMessage] = useState("");
   const [savingUpdate, setSavingUpdate] = useState(false);
   const [filter, setFilter] = useState<FilterType>("all");
+  const [viewMode, setViewMode] = useState<ViewMode>("board");
 
   async function loadData() {
     setLoading(true);
@@ -227,11 +231,6 @@ export default function HousekeepingPage() {
   async function markForCleaning(unitId: number) {
     if (!canEditHousekeeping) return;
 
-    if (!staffName.trim()) {
-      alert("Please enter your name first.");
-      return;
-    }
-
     const existingSession = getCurrentSession(unitId);
 
     if (existingSession) {
@@ -247,7 +246,7 @@ export default function HousekeepingPage() {
           status: "Needs Cleaning",
           started_by: null,
           started_at: null,
-          last_updated_by: staffName.trim(),
+          last_updated_by: currentStaffName,
           last_updated_at: new Date().toISOString(),
           completed_at: null,
         },
@@ -265,7 +264,7 @@ export default function HousekeepingPage() {
       {
         cleaning_session_id: data.id,
         message: "Marked for cleaning",
-        created_by: staffName.trim(),
+        created_by: currentStaffName,
       },
     ]);
 
@@ -275,20 +274,15 @@ export default function HousekeepingPage() {
   async function startCleaning(session: CleaningSession) {
     if (!canEditHousekeeping) return;
 
-    if (!staffName.trim()) {
-      alert("Please enter your name first.");
-      return;
-    }
-
     const now = new Date().toISOString();
 
     const { error } = await supabase
       .from("cleaning_sessions")
       .update({
         status: "In Progress",
-        started_by: session.started_by || staffName.trim(),
+        started_by: session.started_by || currentStaffName,
         started_at: session.started_at || now,
-        last_updated_by: staffName.trim(),
+        last_updated_by: currentStaffName,
         last_updated_at: now,
       })
       .eq("id", session.id);
@@ -303,7 +297,7 @@ export default function HousekeepingPage() {
       {
         cleaning_session_id: session.id,
         message: "Cleaning started",
-        created_by: staffName.trim(),
+        created_by: currentStaffName,
       },
     ]);
 
@@ -314,11 +308,6 @@ export default function HousekeepingPage() {
     session: CleaningSession
   ) {
     if (!canRemoveFromCleaning) return;
-
-    if (!staffName.trim()) {
-      alert("Please enter your name first.");
-      return;
-    }
 
     const confirmed = window.confirm(
       "Remove this unit from the cleaning list?"
@@ -334,7 +323,7 @@ export default function HousekeepingPage() {
       .from("cleaning_sessions")
       .update({
         status: "Cancelled",
-        last_updated_by: staffName.trim(),
+        last_updated_by: currentStaffName,
         last_updated_at: now,
         completed_at: now,
       })
@@ -350,7 +339,7 @@ export default function HousekeepingPage() {
       {
         cleaning_session_id: session.id,
         message: "Removed from cleaning list",
-        created_by: staffName.trim(),
+        created_by: currentStaffName,
       },
     ]);
 
@@ -363,11 +352,6 @@ export default function HousekeepingPage() {
   ) {
     if (!canEditHousekeeping) return;
 
-    if (!staffName.trim()) {
-      alert("Please enter your name first.");
-      return;
-    }
-
     const now = new Date().toISOString();
 
     const updateData: {
@@ -377,7 +361,7 @@ export default function HousekeepingPage() {
       completed_at?: string | null;
     } = {
       status: newStatus,
-      last_updated_by: staffName.trim(),
+      last_updated_by: currentStaffName,
       last_updated_at: now,
     };
 
@@ -400,7 +384,7 @@ export default function HousekeepingPage() {
       {
         cleaning_session_id: session.id,
         message: `Status changed to ${newStatus}`,
-        created_by: staffName.trim(),
+        created_by: currentStaffName,
       },
     ]);
 
@@ -414,10 +398,9 @@ export default function HousekeepingPage() {
   ) {
     if (!canEditHousekeeping) return;
 
-    if (!staffName.trim()) {
-      alert("Please enter your name first.");
-      return;
-    }
+    const checklistItem = checklistItems.find(
+      (item) => item.id === checklistItemId
+    );
 
     const existing = responses.find(
       (response) =>
@@ -430,7 +413,7 @@ export default function HousekeepingPage() {
         .from("cleaning_checklist_responses")
         .update({
           checked,
-          updated_by: staffName.trim(),
+          updated_by: currentStaffName,
           updated_at: new Date().toISOString(),
         })
         .eq("id", existing.id);
@@ -447,7 +430,7 @@ export default function HousekeepingPage() {
             cleaning_session_id: sessionId,
             checklist_item_id: checklistItemId,
             checked,
-            updated_by: staffName.trim(),
+            updated_by: currentStaffName,
             updated_at: new Date().toISOString(),
           },
         ]);
@@ -461,10 +444,20 @@ export default function HousekeepingPage() {
     await supabase
       .from("cleaning_sessions")
       .update({
-        last_updated_by: staffName.trim(),
+        last_updated_by: currentStaffName,
         last_updated_at: new Date().toISOString(),
       })
       .eq("id", sessionId);
+
+    await supabase.from("cleaning_updates").insert([
+      {
+        cleaning_session_id: sessionId,
+        message: `${checklistItem?.label || "Checklist item"} ${
+          checked ? "completed" : "reopened"
+        }`,
+        created_by: currentStaffName,
+      },
+    ]);
 
     await loadData();
   }
@@ -476,11 +469,6 @@ export default function HousekeepingPage() {
       return;
     }
 
-    if (!staffName.trim()) {
-      alert("Please enter your name first.");
-      return;
-    }
-
     setSavingUpdate(true);
 
     const { error } = await supabase
@@ -489,7 +477,7 @@ export default function HousekeepingPage() {
         {
           cleaning_session_id: sessionId,
           message: updateMessage.trim(),
-          created_by: staffName.trim(),
+          created_by: currentStaffName,
         },
       ]);
 
@@ -504,7 +492,7 @@ export default function HousekeepingPage() {
     await supabase
       .from("cleaning_sessions")
       .update({
-        last_updated_by: staffName.trim(),
+        last_updated_by: currentStaffName,
         last_updated_at: new Date().toISOString(),
       })
       .eq("id", sessionId);
@@ -590,6 +578,304 @@ export default function HousekeepingPage() {
       : Math.round(
           (completedChecklistCount / checklistTotal) * 100
         );
+
+  const historySessions = sessions.filter(
+    (session) =>
+      session.status === "Ready" ||
+      session.status === "Cancelled" ||
+      Boolean(session.completed_at)
+  );
+
+  const selectedHistorySession =
+    sessions.find(
+      (session) => session.id === selectedHistorySessionId
+    ) ?? null;
+
+  const selectedHistoryUnit = selectedHistorySession
+    ? units.find(
+        (unit) => unit.id === selectedHistorySession.unit_id
+      ) ?? null
+    : null;
+
+  const selectedHistoryResponses = selectedHistorySession
+    ? responses.filter(
+        (response) =>
+          response.cleaning_session_id ===
+          selectedHistorySession.id
+      )
+    : [];
+
+  const selectedHistoryUpdates = selectedHistorySession
+    ? updates.filter(
+        (update) =>
+          update.cleaning_session_id === selectedHistorySession.id
+      )
+    : [];
+
+  // ----------------------------------
+  // HISTORICAL CLEANING DETAIL
+  // ----------------------------------
+
+  if (selectedHistorySession && selectedHistoryUnit) {
+    return (
+      <main className="min-h-screen bg-gray-100 p-4">
+        <div className="mx-auto max-w-md">
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <button
+              onClick={() => setSelectedHistorySessionId(null)}
+              className="text-sm text-gray-500 underline"
+            >
+              ← Back to Cleaning History
+            </button>
+
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50"
+            >
+              Log out
+            </button>
+          </div>
+
+          <div className="mb-4 rounded-2xl bg-white p-5 shadow-sm">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold uppercase text-gray-400">
+                  Cleaning record
+                </p>
+                <h1 className="text-3xl font-bold text-gray-900">
+                  Unit {selectedHistoryUnit.unit_number}
+                </h1>
+              </div>
+
+              <span
+                className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                  statusStyles[selectedHistorySession.status] ??
+                  "bg-gray-100 text-gray-700"
+                }`}
+              >
+                {selectedHistorySession.status}
+              </span>
+            </div>
+
+            <div className="mt-4 space-y-1 text-sm text-gray-600">
+              <p>
+                Started by: {selectedHistorySession.started_by || "Not recorded"}
+              </p>
+              <p>
+                Last updated by:{" "}
+                {selectedHistorySession.last_updated_by || "Not recorded"}
+              </p>
+              {selectedHistorySession.started_at && (
+                <p>
+                  Started:{" "}
+                  {new Date(
+                    selectedHistorySession.started_at
+                  ).toLocaleString("en-AU")}
+                </p>
+              )}
+              {selectedHistorySession.completed_at && (
+                <p>
+                  Completed:{" "}
+                  {new Date(
+                    selectedHistorySession.completed_at
+                  ).toLocaleString("en-AU")}
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            {Object.entries(sections).map(([section, items]) => (
+              <div
+                key={section}
+                className="rounded-2xl bg-white p-4 shadow-sm"
+              >
+                <h2 className="mb-3 font-bold text-gray-900">
+                  {section}
+                </h2>
+
+                <div className="space-y-3">
+                  {items.map((item) => {
+                    const response = selectedHistoryResponses.find(
+                      (entry) => entry.checklist_item_id === item.id
+                    );
+
+                    return (
+                      <div
+                        key={item.id}
+                        className="flex items-start gap-3"
+                      >
+                        <span
+                          className={`mt-0.5 flex h-5 w-5 items-center justify-center rounded-full text-xs font-bold ${
+                            response?.checked
+                              ? "bg-green-100 text-green-700"
+                              : "bg-gray-100 text-gray-400"
+                          }`}
+                        >
+                          {response?.checked ? "✓" : "–"}
+                        </span>
+
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm text-gray-700">
+                            {item.label}
+                          </p>
+                          {response && (
+                            <p className="mt-0.5 text-xs text-gray-400">
+                              {response.updated_by || "Not recorded"} ·{" "}
+                              {new Date(
+                                response.updated_at
+                              ).toLocaleString("en-AU")}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-4 rounded-2xl bg-white p-4 shadow-sm">
+            <h2 className="font-bold text-gray-900">
+              Activity History
+            </h2>
+
+            {selectedHistoryUpdates.length === 0 ? (
+              <p className="mt-3 text-sm text-gray-400">
+                No activity was recorded for this cleaning.
+              </p>
+            ) : (
+              <div className="mt-4 space-y-3">
+                {selectedHistoryUpdates.map((update) => (
+                  <div
+                    key={update.id}
+                    className="rounded-xl bg-gray-50 p-3"
+                  >
+                    <p className="text-sm text-gray-700">
+                      {update.message}
+                    </p>
+                    <div className="mt-2 flex justify-between gap-3 text-xs text-gray-400">
+                      <span>{update.created_by || "Not recorded"}</span>
+                      <span>
+                        {new Date(update.created_at).toLocaleString(
+                          "en-AU"
+                        )}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  // ----------------------------------
+  // CLEANING HISTORY LIST
+  // ----------------------------------
+
+  if (viewMode === "history") {
+    return (
+      <main className="min-h-screen bg-gray-100 p-4">
+        <div className="mx-auto max-w-md">
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <button
+              onClick={() => setViewMode("board")}
+              className="text-sm text-gray-500 underline"
+            >
+              ← Back to Housekeeping
+            </button>
+
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50"
+            >
+              Log out
+            </button>
+          </div>
+
+          <div className="mb-6">
+            <h1 className="text-2xl font-bold text-gray-900">
+              Cleaning History
+            </h1>
+            <p className="text-gray-500">
+              Completed and cancelled cleaning sessions
+            </p>
+          </div>
+
+          {loading ? (
+            <p className="text-gray-500">Loading history...</p>
+          ) : historySessions.length === 0 ? (
+            <div className="rounded-2xl bg-white p-6 text-center shadow-sm">
+              <p className="text-sm text-gray-500">
+                No completed cleaning sessions yet.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {historySessions.map((session) => {
+                const unit = units.find(
+                  (item) => item.id === session.unit_id
+                );
+
+                return (
+                  <button
+                    key={session.id}
+                    onClick={() =>
+                      setSelectedHistorySessionId(session.id)
+                    }
+                    className="w-full rounded-2xl bg-white p-4 text-left shadow-sm"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-xs uppercase text-gray-400">
+                          Unit
+                        </p>
+                        <p className="text-2xl font-bold text-gray-900">
+                          {unit?.unit_number ?? session.unit_id}
+                        </p>
+                      </div>
+                      <span
+                        className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                          statusStyles[session.status] ??
+                          "bg-gray-100 text-gray-700"
+                        }`}
+                      >
+                        {session.status}
+                      </span>
+                    </div>
+
+                    <div className="mt-3 space-y-1 text-xs text-gray-500">
+                      <p>
+                        Started by: {session.started_by || "Not recorded"}
+                      </p>
+                      <p>
+                        Last updated by:{" "}
+                        {session.last_updated_by || "Not recorded"}
+                      </p>
+                      <p>
+                        Completed:{" "}
+                        {session.completed_at
+                          ? new Date(
+                              session.completed_at
+                            ).toLocaleString("en-AU")
+                          : "Not recorded"}
+                      </p>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </main>
+    );
+  }
 
   // ----------------------------------
   // INDIVIDUAL UNIT VIEW
@@ -780,15 +1066,9 @@ export default function HousekeepingPage() {
               Staff
             </p>
 
-            {canEditHousekeeping && (
-              <input
-                type="text"
-                value={staffName}
-                onChange={(e) => setStaffName(e.target.value)}
-                placeholder="Your name"
-                className="w-full rounded-lg border border-gray-300 px-3 py-2"
-              />
-            )}
+            <p className="text-sm text-gray-600">
+              Logged in as: {currentStaffName}
+            </p>
 
             {selectedSession && (
               <div className="mt-3 space-y-1 text-xs text-gray-500">
@@ -1002,21 +1282,13 @@ export default function HousekeepingPage() {
           )}
         </div>
 
-        {canEditHousekeeping && (
-          <div className="mb-4 rounded-2xl bg-white p-4 shadow-sm">
-            <label className="mb-1 block text-sm font-medium text-gray-700">
-              Your name
-            </label>
-
-            <input
-              type="text"
-              value={staffName}
-              onChange={(e) => setStaffName(e.target.value)}
-              placeholder="Enter your name before updating rooms"
-              className="w-full rounded-lg border border-gray-300 px-3 py-2"
-            />
-          </div>
-        )}
+        <button
+          type="button"
+          onClick={() => setViewMode("history")}
+          className="mb-4 w-full rounded-xl border border-gray-300 bg-white px-4 py-3 font-semibold text-gray-700 shadow-sm hover:bg-gray-50"
+        >
+          View Cleaning History
+        </button>
 
         <div className="mb-4 grid grid-cols-2 gap-2">
           <div className="rounded-xl bg-red-50 p-3 text-center">

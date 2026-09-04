@@ -23,6 +23,7 @@ type Permission = {
 
 type AuthContextValue = {
   user: User | null;
+  userName: string | null;
   role: AppRole | null;
   permissions: Permission[];
   canView: (module: AppModule) => boolean;
@@ -50,6 +51,7 @@ export default function AuthGuard({ children }: AuthGuardProps) {
   const pathname = usePathname();
 
   const [user, setUser] = useState<User | null>(null);
+  const [userName, setUserName] = useState<string | null>(null);
   const [role, setRole] = useState<AppRole | null>(null);
   const [permissions, setPermissions] = useState<Permission[]>([]);
   const [isChecking, setIsChecking] = useState(true);
@@ -70,6 +72,7 @@ export default function AuthGuard({ children }: AuthGuardProps) {
 
       if (!currentUser) {
         setUser(null);
+        setUserName(null);
         setRole(null);
         setPermissions([]);
 
@@ -90,7 +93,7 @@ export default function AuthGuard({ children }: AuthGuardProps) {
 
       const { data: profile, error: profileError } = await supabase
         .from("profiles")
-        .select("role")
+        .select("role, full_name")
         .eq("id", currentUser.id)
         .single();
 
@@ -124,6 +127,7 @@ export default function AuthGuard({ children }: AuthGuardProps) {
         (modulePermissions ?? []) as Permission[];
 
       setUser(currentUser);
+      setUserName(profile.full_name);
       setRole(currentRole);
       setPermissions(currentPermissions);
 
@@ -191,6 +195,7 @@ export default function AuthGuard({ children }: AuthGuardProps) {
     } = supabase.auth.onAuthStateChange((event) => {
       if (event === "SIGNED_OUT") {
         setUser(null);
+        setUserName(null);
         setRole(null);
         setPermissions([]);
         setHasAccess(false);
@@ -241,6 +246,7 @@ export default function AuthGuard({ children }: AuthGuardProps) {
     <AuthContext.Provider
       value={{
         user,
+        userName,
         role,
         permissions,
         canView,
