@@ -13,7 +13,11 @@ import { supabase } from "@/lib/supabase";
 
 type AppRole = "admin" | "editor" | "viewer";
 
-type AppModule = "tasks" | "housekeeping" | "recurring";
+type AppModule =
+  | "tasks"
+  | "housekeeping"
+  | "recurring"
+  | "stock";
 
 type Permission = {
   module: AppModule;
@@ -116,15 +120,14 @@ export default function AuthGuard({ children }: AuthGuardProps) {
       if (permissionsError) {
         console.error(
           "Could not load user permissions:",
-          permissionsError
+          permissionsError,
         );
         setIsChecking(false);
         return;
       }
 
       const currentRole = profile.role as AppRole;
-      const currentPermissions =
-        (modulePermissions ?? []) as Permission[];
+      const currentPermissions = (modulePermissions ?? []) as Permission[];
 
       setUser(currentUser);
       setUserName(profile.full_name);
@@ -145,6 +148,8 @@ export default function AuthGuard({ children }: AuthGuardProps) {
         requiredModule = "housekeeping";
       } else if (pathname.startsWith("/recurring")) {
         requiredModule = "recurring";
+      } else if (pathname.startsWith("/stock")) {
+        requiredModule = "stock";
       }
 
       if (!requiredModule) {
@@ -154,9 +159,7 @@ export default function AuthGuard({ children }: AuthGuardProps) {
       }
 
       const permission = currentPermissions.find(
-        (item) =>
-          item.module === requiredModule &&
-          item.can_view
+        (item) => item.module === requiredModule && item.can_view,
       );
 
       if (permission) {
@@ -166,7 +169,7 @@ export default function AuthGuard({ children }: AuthGuardProps) {
       }
 
       const firstAllowedModule = currentPermissions.find(
-        (item) => item.can_view
+        (item) => item.can_view,
       )?.module;
 
       if (firstAllowedModule === "housekeeping") {
@@ -181,6 +184,11 @@ export default function AuthGuard({ children }: AuthGuardProps) {
 
       if (firstAllowedModule === "tasks") {
         router.replace("/");
+        return;
+      }
+
+      if (firstAllowedModule === "stock") {
+        router.replace("/stock");
         return;
       }
 
@@ -215,8 +223,7 @@ export default function AuthGuard({ children }: AuthGuardProps) {
 
     return permissions.some(
       (permission) =>
-        permission.module === module &&
-        permission.can_view
+        permission.module === module && permission.can_view,
     );
   };
 
@@ -228,7 +235,7 @@ export default function AuthGuard({ children }: AuthGuardProps) {
       (permission) =>
         permission.module === module &&
         permission.can_view &&
-        permission.can_edit
+        permission.can_edit,
     );
   };
 

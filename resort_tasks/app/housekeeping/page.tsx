@@ -1253,10 +1253,16 @@ export default function HousekeepingPage() {
             >
               ← Back to Task Board
             </Link>
+            
           ) : (
             <span />
           )}
-
+          <Link
+            href="/stock"
+            className="text-sm text-gray-500 underline"
+          >
+            Linen Stock
+          </Link>
           <button
             type="button"
             onClick={handleLogout}
