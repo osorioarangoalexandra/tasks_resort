@@ -420,6 +420,7 @@ export default function HousekeepingPage() {
 
       if (error) {
         console.error("Error updating checklist:", error);
+        alert(`Error updating checklist: ${error.message}`);
         return;
       }
     } else {
@@ -1280,7 +1281,11 @@ export default function HousekeepingPage() {
           <p className="text-gray-500">
             Live cleaning status for all units
           </p>
-
+          
+          <div className="mt-2 rounded-lg bg-yellow-50 p-2 text-xs text-yellow-800">
+            Role: {role || "none"} | Can edit housekeeping:{" "}
+            {canEditHousekeeping ? "YES" : "NO"}
+          </div>
           {!canEditHousekeeping && (
             <div className="mt-3 rounded-xl bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700">
               View only — you cannot update housekeeping.
