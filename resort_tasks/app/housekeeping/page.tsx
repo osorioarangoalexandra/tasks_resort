@@ -75,6 +75,33 @@ const statusStyles: Record<string, string> = {
   Ready: "bg-green-100 text-green-700",
 };
 
+async function loadAllChecklistResponses() {
+  const pageSize = 1000;
+  let from = 0;
+  const allResponses: ChecklistResponse[] = [];
+
+  while (true) {
+    const { data, error } = await supabase
+      .from("cleaning_checklist_responses")
+      .select("*")
+      .order("id", { ascending: true })
+      .range(from, from + pageSize - 1);
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    const page = (data ?? []) as ChecklistResponse[];
+    allResponses.push(...page);
+
+    if (page.length < pageSize) {
+      return { data: allResponses, error: null };
+    }
+
+    from += pageSize;
+  }
+}
+
 export default function HousekeepingPage() {
   const { userName, role, canView, canEdit } = useAuth();
   const canViewTasks = canView("tasks");
@@ -124,9 +151,7 @@ export default function HousekeepingPage() {
         .eq("active", true)
         .order("sort_order"),
 
-      supabase
-        .from("cleaning_checklist_responses")
-        .select("*"),
+      loadAllChecklistResponses(),
 
       supabase
         .from("cleaning_updates")
@@ -160,11 +185,42 @@ export default function HousekeepingPage() {
       console.error("Error loading updates:", updatesResult.error);
     }
 
-    setUnits(unitsResult.data ?? []);
-    setSessions(sessionsResult.data ?? []);
-    setChecklistItems(checklistResult.data ?? []);
-    setResponses(responsesResult.data ?? []);
-    setUpdates(updatesResult.data ?? []);
+    setUnits(
+      (unitsResult.data ?? []).map((unit) => ({
+        ...unit,
+        id: Number(unit.id),
+        unit_number: Number(unit.unit_number),
+      }))
+    );
+    setSessions(
+      (sessionsResult.data ?? []).map((session) => ({
+        ...session,
+        id: Number(session.id),
+        unit_id: Number(session.unit_id),
+      }))
+    );
+    setChecklistItems(
+      (checklistResult.data ?? []).map((item) => ({
+        ...item,
+        id: Number(item.id),
+        sort_order: Number(item.sort_order),
+      }))
+    );
+    setResponses(
+      (responsesResult.data ?? []).map((response) => ({
+        ...response,
+        cleaning_session_id: Number(response.cleaning_session_id),
+        checklist_item_id: Number(response.checklist_item_id),
+        checked: Boolean(response.checked),
+      }))
+    );
+    setUpdates(
+      (updatesResult.data ?? []).map((update) => ({
+        ...update,
+        id: Number(update.id),
+        cleaning_session_id: Number(update.cleaning_session_id),
+      }))
+    );
 
     setLoading(false);
   }
@@ -388,7 +444,20 @@ export default function HousekeepingPage() {
       },
     ]);
 
-    await loadData();
+    setSessions((currentSessions) =>
+      currentSessions.map((currentSession) =>
+        currentSession.id === session.id
+          ? {
+              ...currentSession,
+              ...updateData,
+            }
+          : currentSession
+      )
+    );
+
+    if (newStatus === "Ready") {
+      setSelectedUnitId(null);
+    }
   }
 
   async function toggleChecklistItem(
@@ -402,45 +471,51 @@ export default function HousekeepingPage() {
       (item) => item.id === checklistItemId
     );
 
-    const existing = responses.find(
-      (response) =>
-        response.cleaning_session_id === sessionId &&
-        response.checklist_item_id === checklistItemId
-    );
-
-    if (existing) {
-      const { error } = await supabase
-        .from("cleaning_checklist_responses")
-        .update({
+    const { data: savedResponse, error } = await supabase
+      .from("cleaning_checklist_responses")
+      .upsert(
+        {
+          cleaning_session_id: sessionId,
+          checklist_item_id: checklistItemId,
           checked,
           updated_by: currentStaffName,
           updated_at: new Date().toISOString(),
-        })
-        .eq("id", existing.id);
+        },
+        {
+          onConflict: "cleaning_session_id,checklist_item_id",
+        }
+      )
+      .select("*")
+      .single();
 
-      if (error) {
-        console.error("Error updating checklist:", error);
-        alert(`Error updating checklist: ${error.message}`);
-        return;
-      }
-    } else {
-      const { error } = await supabase
-        .from("cleaning_checklist_responses")
-        .insert([
-          {
-            cleaning_session_id: sessionId,
-            checklist_item_id: checklistItemId,
-            checked,
-            updated_by: currentStaffName,
-            updated_at: new Date().toISOString(),
-          },
-        ]);
-
-      if (error) {
-        console.error("Error creating checklist response:", error);
-        return;
-      }
+    if (error) {
+      console.error("Error saving checklist response:", {
+        message: error.message,
+        code: error.code,
+        details: error.details,
+        hint: error.hint,
+      });
+      alert(`Error saving checklist response: ${error.message}`);
+      return;
     }
+
+    const normalizedResponse: ChecklistResponse = {
+      ...savedResponse,
+      cleaning_session_id: Number(savedResponse.cleaning_session_id),
+      checklist_item_id: Number(savedResponse.checklist_item_id),
+      checked: Boolean(savedResponse.checked),
+    };
+
+    setResponses((currentResponses) => [
+      ...currentResponses.filter(
+        (response) =>
+          !(
+            Number(response.cleaning_session_id) === sessionId &&
+            Number(response.checklist_item_id) === checklistItemId
+          )
+      ),
+      normalizedResponse,
+    ]);
 
     await supabase
       .from("cleaning_sessions")
@@ -459,8 +534,6 @@ export default function HousekeepingPage() {
         created_by: currentStaffName,
       },
     ]);
-
-    await loadData();
   }
 
   async function addUpdate(sessionId: number) {
