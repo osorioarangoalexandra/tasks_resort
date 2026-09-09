@@ -43,6 +43,37 @@ type TaskNote = {
   created_at: string;
 };
 
+type TaskAttachment = {
+  id: number;
+  task_id: number;
+  task_note_id: number | null;
+  storage_path: string;
+  file_name: string;
+  mime_type: string;
+  uploaded_by_name: string;
+  created_at: string;
+  signed_url: string;
+};
+
+const PHOTO_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/heic",
+  "image/heif",
+];
+
+function validatePhotos(files: File[]) {
+  const invalid = files.find(
+    (file) => !PHOTO_TYPES.includes(file.type) || file.size > 5 * 1024 * 1024,
+  );
+  if (invalid) {
+    alert(`${invalid.name} must be an image no larger than 5 MB.`);
+    return false;
+  }
+  return true;
+}
+
 export default function Home() {
   const { user, userName, canEdit } = useAuth();
   const canEditTasks = canEdit("tasks");
@@ -58,6 +89,10 @@ export default function Home() {
   const [expandedTaskId, setExpandedTaskId] = useState<number | null>(null);
   const [newNote, setNewNote] = useState("");
   const [savingNote, setSavingNote] = useState(false);
+  const [attachments, setAttachments] = useState<TaskAttachment[]>([]);
+  const [newTaskPhotos, setNewTaskPhotos] = useState<File[]>([]);
+  const [updatePhotos, setUpdatePhotos] = useState<File[]>([]);
+  const [uploadingPhotos, setUploadingPhotos] = useState(false);
 
   const [newTask, setNewTask] = useState({
     title: "",
@@ -72,30 +107,39 @@ export default function Home() {
   async function loadData() {
     setLoading(true);
 
-    const [tasksResult, unitsResult, taskUnitsResult, taskNotesResult] =
-      await Promise.all([
-        supabase
-          .from("tasks")
-          .select("*")
-          .order("created_at", { ascending: false }),
+    const [
+      tasksResult,
+      unitsResult,
+      taskUnitsResult,
+      taskNotesResult,
+      attachmentsResult,
+    ] = await Promise.all([
+      supabase
+        .from("tasks")
+        .select("*")
+        .order("created_at", { ascending: false }),
 
-        supabase
-          .from("units")
-          .select("*")
-          .eq("active", true)
-          .order("unit_number", { ascending: true }),
+      supabase
+        .from("units")
+        .select("*")
+        .eq("active", true)
+        .order("unit_number", { ascending: true }),
 
-        supabase
-          .from("task_units")
-          .select(
-            "task_id, unit_id, is_completed, completed_by_name, completed_at",
-          ),
+      supabase
+        .from("task_units")
+        .select(
+          "task_id, unit_id, is_completed, completed_by_name, completed_at",
+        ),
 
-        supabase
-          .from("task_notes")
-          .select("id, task_id, note, created_by_name, created_at")
-          .order("created_at", { ascending: false }),
-      ]);
+      supabase
+        .from("task_notes")
+        .select("id, task_id, note, created_by_name, created_at")
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("task_attachments")
+        .select("*")
+        .order("created_at", { ascending: false }),
+    ]);
 
     if (tasksResult.error) {
       console.error("Error loading tasks:", tasksResult.error);
@@ -111,6 +155,37 @@ export default function Home() {
 
     if (taskNotesResult.error) {
       console.error("Error loading task notes:", taskNotesResult.error);
+    }
+
+    if (attachmentsResult.error) {
+      console.error("Error loading task photos:", attachmentsResult.error);
+    }
+
+    const attachmentRows = (attachmentsResult.data ?? []) as Omit<
+      TaskAttachment,
+      "signed_url"
+    >[];
+    if (attachmentRows.length > 0) {
+      const { data: signedRows, error: signedError } = await supabase.storage
+        .from("task-photos")
+        .createSignedUrls(
+          attachmentRows.map((attachment) => attachment.storage_path),
+          3600,
+        );
+      if (signedError) console.error("Error opening task photos:", signedError);
+      setAttachments(
+        attachmentRows.map((attachment, index) => ({
+          ...attachment,
+          id: Number(attachment.id),
+          task_id: Number(attachment.task_id),
+          task_note_id: attachment.task_note_id
+            ? Number(attachment.task_note_id)
+            : null,
+          signed_url: signedRows?.[index]?.signedUrl ?? "",
+        })),
+      );
+    } else {
+      setAttachments([]);
     }
 
     const loadedUnits: Unit[] = unitsResult.data ?? [];
@@ -246,27 +321,95 @@ export default function Home() {
     await loadData();
   }
 
-  async function addTaskNote(taskId: number) {
-    if (!canEditTasks || !user || !newNote.trim()) return;
+  async function uploadTaskPhotos(
+    taskId: number,
+    files: File[],
+    taskNoteId: number | null = null,
+  ) {
+    if (!user || files.length === 0) return true;
+    setUploadingPhotos(true);
 
-    setSavingNote(true);
+    for (const file of files) {
+      const extension = file.name.split(".").pop()?.toLowerCase() || "jpg";
+      const storagePath = `tasks/${taskId}/${crypto.randomUUID()}.${extension}`;
+      const { error: uploadError } = await supabase.storage
+        .from("task-photos")
+        .upload(storagePath, file, { contentType: file.type, upsert: false });
 
-    const { error } = await supabase.from("task_notes").insert({
-      task_id: taskId,
-      note: newNote.trim(),
-      created_by: user.id,
-      created_by_name: currentStaffName,
-    });
+      if (uploadError) {
+        console.error("Error uploading task photo:", uploadError);
+        alert(
+          `The photo ${file.name} could not be uploaded: ${uploadError.message}`,
+        );
+        setUploadingPhotos(false);
+        return false;
+      }
 
-    setSavingNote(false);
+      const { error: recordError } = await supabase
+        .from("task_attachments")
+        .insert({
+          task_id: taskId,
+          task_note_id: taskNoteId,
+          storage_path: storagePath,
+          file_name: file.name,
+          mime_type: file.type,
+          size_bytes: file.size,
+          uploaded_by: user.id,
+          uploaded_by_name: currentStaffName,
+        });
 
-    if (error) {
-      console.error("Error adding task note:", error);
-      alert("There was an error saving the note.");
-      return;
+      if (recordError) {
+        await supabase.storage.from("task-photos").remove([storagePath]);
+        console.error("Error saving task photo:", recordError);
+        alert(
+          `The photo ${file.name} could not be saved: ${recordError.message}`,
+        );
+        setUploadingPhotos(false);
+        return false;
+      }
     }
 
+    setUploadingPhotos(false);
+    return true;
+  }
+
+  async function addTaskNote(taskId: number) {
+    if (
+      !canEditTasks ||
+      !user ||
+      (!newNote.trim() && updatePhotos.length === 0)
+    )
+      return;
+
+    setSavingNote(true);
+    let noteId: number | null = null;
+
+    if (newNote.trim()) {
+      const { data, error } = await supabase
+        .from("task_notes")
+        .insert({
+          task_id: taskId,
+          note: newNote.trim(),
+          created_by: user.id,
+          created_by_name: currentStaffName,
+        })
+        .select("id")
+        .single();
+
+      if (error) {
+        console.error("Error adding task note:", error);
+        alert("There was an error saving the note.");
+        setSavingNote(false);
+        return;
+      }
+      noteId = Number(data.id);
+    }
+
+    await uploadTaskPhotos(taskId, updatePhotos, noteId);
+
     setNewNote("");
+    setUpdatePhotos([]);
+    setSavingNote(false);
     await loadData();
   }
 
@@ -361,6 +504,8 @@ export default function Home() {
       }
     }
 
+    await uploadTaskPhotos(Number(data.id), newTaskPhotos);
+
     setNewTask({
       title: "",
       area: "",
@@ -372,6 +517,7 @@ export default function Home() {
     });
 
     setSelectedUnitIds([]);
+    setNewTaskPhotos([]);
     setShowForm(false);
 
     await loadData();
@@ -714,7 +860,7 @@ export default function Home() {
         >
           🧹 Housekeeping
         </Link>
-          <Link
+        <Link
           href="/stock"
           className="mb-3 block w-full rounded-xl bg-white px-4 py-3 text-center font-semibold text-gray-900 shadow-sm"
         >
@@ -944,6 +1090,27 @@ export default function Home() {
               />
             </div>
 
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700">
+                Photos (optional)
+              </label>
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+                multiple
+                onChange={(e) => {
+                  const files = Array.from(e.target.files ?? []);
+                  if (validatePhotos(files)) setNewTaskPhotos(files);
+                }}
+                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"
+              />
+              {newTaskPhotos.length > 0 && (
+                <p className="mt-1 text-xs text-gray-500">
+                  {newTaskPhotos.length} photo(s) selected
+                </p>
+              )}
+            </div>
+
             <button
               type="submit"
               className="w-full rounded-xl bg-green-600 px-4 py-3 font-semibold text-white"
@@ -977,6 +1144,9 @@ export default function Home() {
             ).length;
             const hasUnitProgress = task.unit_progress.length > 0;
             const isExpanded = expandedTaskId === task.id;
+            const taskPhotos = attachments.filter(
+              (attachment) => attachment.task_id === task.id,
+            );
 
             return (
               <div key={task.id} className="rounded-xl bg-white p-4 shadow-sm">
@@ -1071,6 +1241,7 @@ export default function Home() {
                   onClick={() => {
                     setExpandedTaskId(isExpanded ? null : task.id);
                     setNewNote("");
+                    setUpdatePhotos([]);
                   }}
                   className="mt-4 w-full rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700"
                 >
@@ -1133,13 +1304,35 @@ export default function Home() {
                             className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2"
                           />
 
+                          <input
+                            type="file"
+                            accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+                            multiple
+                            onChange={(e) => {
+                              const files = Array.from(e.target.files ?? []);
+                              if (validatePhotos(files)) setUpdatePhotos(files);
+                            }}
+                            className="mt-2 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"
+                          />
+                          {updatePhotos.length > 0 && (
+                            <p className="mt-1 text-xs text-gray-500">
+                              {updatePhotos.length} photo(s) selected
+                            </p>
+                          )}
+
                           <button
                             type="button"
-                            disabled={savingNote || !newNote.trim()}
+                            disabled={
+                              savingNote ||
+                              uploadingPhotos ||
+                              (!newNote.trim() && updatePhotos.length === 0)
+                            }
                             onClick={() => addTaskNote(task.id)}
                             className="mt-2 w-full rounded-lg bg-blue-600 px-4 py-2 font-semibold text-white disabled:opacity-50"
                           >
-                            {savingNote ? "Saving..." : "Save note"}
+                            {savingNote || uploadingPhotos
+                              ? "Saving..."
+                              : "Save update"}
                           </button>
                         </div>
                       )}
@@ -1169,6 +1362,48 @@ export default function Home() {
                         )}
                       </div>
                     </div>
+
+                    {taskPhotos.length > 0 && (
+                      <div>
+                        <h3 className="font-semibold text-gray-900">Photos</h3>
+                        <div className="mt-3 grid grid-cols-2 gap-3">
+                          {taskPhotos.map((photo) => (
+                            <a
+                              key={photo.id}
+                              href={photo.signed_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="overflow-hidden rounded-lg bg-white shadow-sm"
+                            >
+                              {photo.signed_url &&
+                              photo.mime_type !== "image/heic" &&
+                              photo.mime_type !== "image/heif" ? (
+                                <img
+                                  src={photo.signed_url}
+                                  alt={photo.file_name}
+                                  className="h-32 w-full object-cover"
+                                />
+                              ) : (
+                                <div className="flex h-32 items-center justify-center bg-gray-100 text-sm text-gray-500">
+                                  Open photo
+                                </div>
+                              )}
+                              <div className="p-2 text-xs text-gray-500">
+                                <p className="truncate font-medium text-gray-700">
+                                  {photo.file_name}
+                                </p>
+                                <p>
+                                  {photo.uploaded_by_name} ·{" "}
+                                  {new Date(photo.created_at).toLocaleString(
+                                    "en-AU",
+                                  )}
+                                </p>
+                              </div>
+                            </a>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 

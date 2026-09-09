@@ -78,6 +78,37 @@ type RunUnit = {
   completed_by_name: string | null;
   completed_at: string | null;
 };
+type RecurringAttachment = {
+  id: number;
+  recurring_task_id: number | null;
+  recurring_task_run_id: number | null;
+  recurring_task_run_note_id: number | null;
+  storage_path: string;
+  file_name: string;
+  mime_type: string;
+  uploaded_by_name: string;
+  created_at: string;
+  signed_url: string;
+};
+
+const PHOTO_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/heic",
+  "image/heif",
+];
+
+function validatePhotos(files: File[]) {
+  const invalid = files.find(
+    (file) => !PHOTO_TYPES.includes(file.type) || file.size > 5 * 1024 * 1024,
+  );
+  if (invalid) {
+    alert(`${invalid.name} must be an image no larger than 5 MB.`);
+    return false;
+  }
+  return true;
+}
 
 type FormState = {
   title: string;
@@ -164,7 +195,8 @@ async function loadAllRows(
     | "recurring_task_assignees"
     | "recurring_task_units"
     | "recurring_task_run_assignees"
-    | "recurring_task_run_units",
+    | "recurring_task_run_units"
+    | "recurring_task_attachments",
   orderColumn: string,
   ascending: boolean,
 ) {
@@ -190,7 +222,7 @@ async function loadAllRows(
 }
 
 export default function RecurringPage() {
-  const { userName, role, canEdit } = useAuth();
+  const { user, userName, role, canEdit } = useAuth();
   const canEditRecurring = canEdit("recurring");
   const currentStaffName = userName?.trim() || "Unknown user";
 
@@ -207,6 +239,10 @@ export default function RecurringPage() {
   const [templateUnits, setTemplateUnits] = useState<TemplateUnit[]>([]);
   const [runAssignees, setRunAssignees] = useState<RunAssignee[]>([]);
   const [runUnits, setRunUnits] = useState<RunUnit[]>([]);
+  const [attachments, setAttachments] = useState<RecurringAttachment[]>([]);
+  const [setupPhotos, setSetupPhotos] = useState<File[]>([]);
+  const [runPhotos, setRunPhotos] = useState<File[]>([]);
+  const [uploadingPhotos, setUploadingPhotos] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -233,6 +269,7 @@ export default function RecurringPage() {
       templateUnitsResult,
       runAssigneesResult,
       runUnitsResult,
+      attachmentsResult,
     ] = await Promise.all([
       supabase
         .from("recurring_tasks")
@@ -250,6 +287,7 @@ export default function RecurringPage() {
         true,
       ),
       loadAllRows("recurring_task_run_units", "unit_number", true),
+      loadAllRows("recurring_task_attachments", "created_at", false),
     ]);
 
     if (
@@ -259,7 +297,8 @@ export default function RecurringPage() {
       templateAssigneesResult.error ||
       templateUnitsResult.error ||
       runAssigneesResult.error ||
-      runUnitsResult.error
+      runUnitsResult.error ||
+      attachmentsResult.error
     ) {
       console.error("Error loading recurring data:", {
         templates: templatesResult.error,
@@ -269,6 +308,7 @@ export default function RecurringPage() {
         templateUnits: templateUnitsResult.error,
         runAssignees: runAssigneesResult.error,
         runUnits: runUnitsResult.error,
+        attachments: attachmentsResult.error,
       });
       alert(
         "There was an error loading recurring users or units. Check the browser console for details.",
@@ -342,6 +382,39 @@ export default function RecurringPage() {
       })) as RunUnit[],
     );
 
+    const attachmentRows = (attachmentsResult.data ?? []) as unknown as Omit<
+      RecurringAttachment,
+      "signed_url"
+    >[];
+    if (attachmentRows.length > 0) {
+      const { data: signedRows, error: signedError } = await supabase.storage
+        .from("task-photos")
+        .createSignedUrls(
+          attachmentRows.map((attachment) => attachment.storage_path),
+          3600,
+        );
+      if (signedError)
+        console.error("Error opening recurring photos:", signedError);
+      setAttachments(
+        attachmentRows.map((attachment, index) => ({
+          ...attachment,
+          id: Number(attachment.id),
+          recurring_task_id: attachment.recurring_task_id
+            ? Number(attachment.recurring_task_id)
+            : null,
+          recurring_task_run_id: attachment.recurring_task_run_id
+            ? Number(attachment.recurring_task_run_id)
+            : null,
+          recurring_task_run_note_id: attachment.recurring_task_run_note_id
+            ? Number(attachment.recurring_task_run_note_id)
+            : null,
+          signed_url: signedRows?.[index]?.signedUrl ?? "",
+        })),
+      );
+    } else {
+      setAttachments([]);
+    }
+
     setLoading(false);
   }
 
@@ -351,12 +424,14 @@ export default function RecurringPage() {
 
   function openCreateForm() {
     setEditingId(null);
+    setSetupPhotos([]);
     setForm({ ...emptyForm, start_date: todayString() });
     setShowForm(true);
   }
 
   function openEditForm(task: RecurringTask) {
     setEditingId(task.id);
+    setSetupPhotos([]);
     setForm({
       title: task.title,
       area: task.area ?? "",
@@ -372,6 +447,61 @@ export default function RecurringPage() {
       start_date: task.next_due_date,
     });
     setShowForm(true);
+  }
+
+  async function uploadRecurringPhotos(
+    files: File[],
+    parent: { templateId?: number; runId?: number; runNoteId?: number | null },
+  ) {
+    if (!user || files.length === 0) return true;
+    setUploadingPhotos(true);
+    const parentFolder = parent.templateId
+      ? `recurring-templates/${parent.templateId}`
+      : `recurring-runs/${parent.runId}`;
+
+    for (const file of files) {
+      const extension = file.name.split(".").pop()?.toLowerCase() || "jpg";
+      const storagePath = `${parentFolder}/${crypto.randomUUID()}.${extension}`;
+      const { error: uploadError } = await supabase.storage
+        .from("task-photos")
+        .upload(storagePath, file, { contentType: file.type, upsert: false });
+
+      if (uploadError) {
+        console.error("Error uploading recurring photo:", uploadError);
+        alert(
+          `The photo ${file.name} could not be uploaded: ${uploadError.message}`,
+        );
+        setUploadingPhotos(false);
+        return false;
+      }
+
+      const { error: recordError } = await supabase
+        .from("recurring_task_attachments")
+        .insert({
+          recurring_task_id: parent.templateId ?? null,
+          recurring_task_run_id: parent.runId ?? null,
+          recurring_task_run_note_id: parent.runNoteId ?? null,
+          storage_path: storagePath,
+          file_name: file.name,
+          mime_type: file.type,
+          size_bytes: file.size,
+          uploaded_by: user.id,
+          uploaded_by_name: currentStaffName,
+        });
+
+      if (recordError) {
+        await supabase.storage.from("task-photos").remove([storagePath]);
+        console.error("Error saving recurring photo:", recordError);
+        alert(
+          `The photo ${file.name} could not be saved: ${recordError.message}`,
+        );
+        setUploadingPhotos(false);
+        return false;
+      }
+    }
+
+    setUploadingPhotos(false);
+    return true;
   }
 
   async function saveTemplate(event: FormEvent<HTMLFormElement>) {
@@ -494,9 +624,12 @@ export default function RecurringPage() {
       return;
     }
 
+    await uploadRecurringPhotos(setupPhotos, { templateId });
+
     setShowForm(false);
     setEditingId(null);
     setForm(emptyForm);
+    setSetupPhotos([]);
     await loadData();
   }
 
@@ -731,34 +864,43 @@ export default function RecurringPage() {
   }
 
   async function addRunNote(runId: number) {
-    if (!canEditRecurring || !noteText.trim()) return;
-
-    const { data, error } = await supabase
-      .from("recurring_task_run_notes")
-      .insert([
-        {
-          recurring_task_run_id: runId,
-          note: noteText.trim(),
-          created_by_name: currentStaffName,
-        },
-      ])
-      .select("*")
-      .single();
-
-    if (error) {
-      alert("There was an error saving the note: " + error.message);
+    if (!canEditRecurring || (!noteText.trim() && runPhotos.length === 0))
       return;
+
+    let savedNote: RunNote | null = null;
+    if (noteText.trim()) {
+      const result = await supabase
+        .from("recurring_task_run_notes")
+        .insert([
+          {
+            recurring_task_run_id: runId,
+            note: noteText.trim(),
+            created_by_name: currentStaffName,
+          },
+        ])
+        .select("*")
+        .single();
+
+      if (result.error) {
+        alert("There was an error saving the note: " + result.error.message);
+        return;
+      }
+
+      savedNote = {
+        ...result.data,
+        id: Number(result.data.id),
+        recurring_task_run_id: Number(result.data.recurring_task_run_id),
+      } as RunNote;
     }
 
-    setNotes((current) => [
-      {
-        ...data,
-        id: Number(data.id),
-        recurring_task_run_id: Number(data.recurring_task_run_id),
-      } as RunNote,
-      ...current,
-    ]);
+    await uploadRecurringPhotos(runPhotos, {
+      runId,
+      runNoteId: savedNote?.id ?? null,
+    });
+    if (savedNote) setNotes((current) => [savedNote as RunNote, ...current]);
     setNoteText("");
+    setRunPhotos([]);
+    await loadData();
   }
 
   const visibleRuns = useMemo(() => {
@@ -877,6 +1019,12 @@ export default function RecurringPage() {
                 );
                 const assignedUnits = runUnits.filter(
                   (item) => item.recurring_task_run_id === run.id,
+                );
+                const runTaskPhotos = attachments.filter(
+                  (photo) => photo.recurring_task_id === run.recurring_task_id,
+                );
+                const executionPhotos = attachments.filter(
+                  (photo) => photo.recurring_task_run_id === run.id,
                 );
                 const overdue =
                   run.status !== "Completed" && run.due_date < todayString();
@@ -1016,22 +1164,92 @@ export default function RecurringPage() {
                         )}
 
                         {canEditRecurring && (
-                          <div className="flex gap-2">
+                          <div>
+                            <div className="flex gap-2">
+                              <input
+                                value={noteText}
+                                onChange={(event) =>
+                                  setNoteText(event.target.value)
+                                }
+                                placeholder="Add an update"
+                                className="min-w-0 flex-1 rounded-lg border border-gray-300 px-3 py-2"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => addRunNote(run.id)}
+                                disabled={
+                                  uploadingPhotos ||
+                                  (!noteText.trim() && runPhotos.length === 0)
+                                }
+                                className="rounded-lg bg-black px-4 py-2 font-semibold text-white"
+                              >
+                                {uploadingPhotos ? "Saving..." : "Add"}
+                              </button>
+                            </div>
                             <input
-                              value={noteText}
-                              onChange={(event) =>
-                                setNoteText(event.target.value)
-                              }
-                              placeholder="Add an update"
-                              className="min-w-0 flex-1 rounded-lg border border-gray-300 px-3 py-2"
+                              type="file"
+                              accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+                              multiple
+                              onChange={(event) => {
+                                const files = Array.from(
+                                  event.target.files ?? [],
+                                );
+                                if (validatePhotos(files)) setRunPhotos(files);
+                              }}
+                              className="mt-2 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"
                             />
-                            <button
-                              type="button"
-                              onClick={() => addRunNote(run.id)}
-                              className="rounded-lg bg-black px-4 py-2 font-semibold text-white"
-                            >
-                              Add
-                            </button>
+                            {runPhotos.length > 0 && (
+                              <p className="mt-1 text-xs text-gray-500">
+                                {runPhotos.length} photo(s) selected
+                              </p>
+                            )}
+                          </div>
+                        )}
+
+                        {(runTaskPhotos.length > 0 ||
+                          executionPhotos.length > 0) && (
+                          <div className="mt-4">
+                            <p className="mb-2 text-sm font-semibold text-gray-700">
+                              Photos
+                            </p>
+                            <div className="grid grid-cols-2 gap-3">
+                              {[...runTaskPhotos, ...executionPhotos].map(
+                                (photo) => (
+                                  <a
+                                    key={photo.id}
+                                    href={photo.signed_url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="overflow-hidden rounded-lg bg-white shadow-sm"
+                                  >
+                                    {photo.signed_url &&
+                                    photo.mime_type !== "image/heic" &&
+                                    photo.mime_type !== "image/heif" ? (
+                                      <img
+                                        src={photo.signed_url}
+                                        alt={photo.file_name}
+                                        className="h-28 w-full object-cover"
+                                      />
+                                    ) : (
+                                      <div className="flex h-28 items-center justify-center bg-gray-100 text-sm text-gray-500">
+                                        Open photo
+                                      </div>
+                                    )}
+                                    <div className="p-2 text-xs text-gray-500">
+                                      <p className="truncate font-medium text-gray-700">
+                                        {photo.file_name}
+                                      </p>
+                                      <p>
+                                        {photo.uploaded_by_name} ·{" "}
+                                        {new Date(
+                                          photo.created_at,
+                                        ).toLocaleString("en-AU")}
+                                      </p>
+                                    </div>
+                                  </a>
+                                ),
+                              )}
+                            </div>
                           </div>
                         )}
 
@@ -1290,6 +1508,27 @@ export default function RecurringPage() {
                   />
                 </div>
 
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-gray-700">
+                    Reference photos (optional)
+                  </label>
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+                    multiple
+                    onChange={(event) => {
+                      const files = Array.from(event.target.files ?? []);
+                      if (validatePhotos(files)) setSetupPhotos(files);
+                    }}
+                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"
+                  />
+                  {setupPhotos.length > 0 && (
+                    <p className="mt-1 text-xs text-gray-500">
+                      {setupPhotos.length} photo(s) selected
+                    </p>
+                  )}
+                </div>
+
                 <button
                   type="submit"
                   disabled={saving}
@@ -1317,6 +1556,9 @@ export default function RecurringPage() {
                 );
                 const assignedUnits = templateUnits.filter(
                   (item) => item.recurring_task_id === task.id,
+                );
+                const templatePhotos = attachments.filter(
+                  (photo) => photo.recurring_task_id === task.id,
                 );
 
                 return (
@@ -1371,6 +1613,34 @@ export default function RecurringPage() {
                       <p className="mt-3 rounded-lg bg-gray-50 p-3 text-sm text-gray-600">
                         {task.notes}
                       </p>
+                    )}
+
+                    {templatePhotos.length > 0 && (
+                      <div className="mt-3 grid grid-cols-3 gap-2">
+                        {templatePhotos.map((photo) => (
+                          <a
+                            key={photo.id}
+                            href={photo.signed_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="overflow-hidden rounded-lg border border-gray-200"
+                          >
+                            {photo.signed_url &&
+                            photo.mime_type !== "image/heic" &&
+                            photo.mime_type !== "image/heif" ? (
+                              <img
+                                src={photo.signed_url}
+                                alt={photo.file_name}
+                                className="h-24 w-full object-cover"
+                              />
+                            ) : (
+                              <div className="flex h-24 items-center justify-center bg-gray-100 text-xs text-gray-500">
+                                Open photo
+                              </div>
+                            )}
+                          </a>
+                        ))}
+                      </div>
                     )}
 
                     {canEditRecurring && (
@@ -1622,6 +1892,29 @@ export default function RecurringPage() {
                             rows={3}
                             className="w-full rounded-lg border border-gray-300 px-3 py-2"
                           />
+                        </div>
+
+                        <div>
+                          <label className="mb-1 block text-sm font-medium text-gray-700">
+                            Add reference photos (optional)
+                          </label>
+                          <input
+                            type="file"
+                            accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+                            multiple
+                            onChange={(event) => {
+                              const files = Array.from(
+                                event.target.files ?? [],
+                              );
+                              if (validatePhotos(files)) setSetupPhotos(files);
+                            }}
+                            className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"
+                          />
+                          {setupPhotos.length > 0 && (
+                            <p className="mt-1 text-xs text-gray-500">
+                              {setupPhotos.length} photo(s) selected
+                            </p>
+                          )}
                         </div>
 
                         <div className="grid grid-cols-2 gap-2">
